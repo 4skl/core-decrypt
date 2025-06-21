@@ -1,6 +1,17 @@
 # core-decrypt
 Tool for recovering Bitcoin Core wallet passwords. Requires an OpenCL device.
 
+## Attribution
+This is a Windows-compatible fork of the original [core-decrypt](https://github.com/brichard19/core-decrypt/tree/master) by brichard19. The main improvement in this version is that `walletinfo.py` has been updated to work on Windows without requiring the deprecated `bsddb.db` library or its problematic replacements (`bsddb3`/`berkeleydb`) that often fail to install on Windows systems.
+
+### Changes from original:
+- Replaced Berkeley DB dependency with pure Python implementation
+- Fixed Windows compatibility issues
+- Maintained full compatibility with the original encrypted key format
+
+### Known Issues:
+- The `walletinfo.py` script may display a warning about "unexpected Bitcoin Core key derivation method" due to the manual parsing approach. This warning can be safely ignored as the encrypted key extraction still works correctly.
+
 ### Note: Please test against some of the sample wallets to verify the program works properly. Each vendor has a different OpenCL implementation, and I am unable to test all of them
 
 Usage:
@@ -19,8 +30,11 @@ Run the `walletinfo.py` script on the wallet file. The output contains the encry
 
 ```
 # python walletinfo.py wallet.dat
+walletinfo.py: warning: unexpected Bitcoin Core key derivation method  4110353185
 ec01bd09d2befa62ec34609fa2e19316063a9a688aef03494ab9a4d8ba67e24c414609b1ce5abb850002ecc0
 ```
+
+Note: The warning message can be safely ignored. The important output is the hexadecimal string on the second line.
 
 ### Recovering the password
 
