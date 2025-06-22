@@ -277,6 +277,12 @@ paket-files/
 __pycache__/
 *.pyc
 
+# Python virtual environments
+venv/
+env/
+.venv/
+.env/
+
 # Cake - Uncomment if you are using it
 # tools/
 
@@ -285,5 +291,15 @@ __pycache__/
 *.002
 *.003
 
+# User wallet files (keep sample wallets)
 *.dat
-*.txt
+!sample_wallets/*.dat
+
+# User wordlists and test files (keep project word lists)
+wordlist.txt
+test_*.txt
+quick_test.txt
+password_*.txt
+
+# Keep project word lists
+!word_lists/*.txt

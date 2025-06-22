@@ -62,22 +62,27 @@ bool is_hex(std::string &s)
 
 bool parse_encrypted_key(std::string s, unsigned int iv[4], unsigned int ct[4], unsigned char salt[8], unsigned int *iterations)
 {
+    std::cout << "Encrypted key length: " << s.length() << " characters" << std::endl;
+    std::cout << "Encrypted key: " << s << std::endl;
+    
     if(s.length() != 88 || !is_hex(s)) {
-        std::cout << "Invalid encrypted key: expected 88 hex characters" << std::endl;
+        std::cout << "Invalid encrypted key: expected 88 hex characters, got " << s.length() << std::endl;
         return false;
-    }
-
-    std::vector<unsigned int> words = parse_words(s.substr(0, 32));
+    }    std::vector<unsigned int> words = parse_words(s.substr(0, 32));
     std::memcpy(iv, words.data(), 16);
+    std::cout << "IV parsed" << std::endl;
 
     words = parse_words(s.substr(32, 32));
     std::memcpy(ct, words.data(), 16);
+    std::cout << "Ciphertext parsed" << std::endl;
 
     std::vector<unsigned char> bytes = parse_bytes(s.substr(64, 16));
     std::memcpy(salt, bytes.data(), 8);
+    std::cout << "Salt parsed" << std::endl;
 
     words = parse_words(s.substr(80, 8));
     *iterations = words[0];
+    std::cout << "Iterations: " << *iterations << std::endl;
 
     return true;
 }
@@ -160,6 +165,7 @@ void usage()
     std::cout << "--list-devices          List available OpenCL devices" << std::endl;
     std::cout << "--device DEVICE         Specify OpenCL device to use" << std::endl;
     std::cout << "--start NUM             Specify where in the password space to start" << std::endl;
+    std::cout << "--eta-interval SECONDS  Set ETA update interval in seconds (default: 30)" << std::endl;
     std::cout << std::endl;
 }
 
@@ -168,9 +174,8 @@ int main(int argc, char **argv)
     std::vector<std::string> args;
     for(int i = 1; i < argc; i++) {
         args.push_back(std::string(argv[i]));
-    }
-
-    int selected_device = 0;
+    }    int selected_device = 0;
+    unsigned int eta_interval = 30; // Default 30 seconds
 
     unsigned char salt[8];
     unsigned int ct[4];
@@ -226,8 +231,20 @@ int main(int argc, char **argv)
             if(!parse_uint64(args[i + 1], &start)) {
                 std::cout << prefix << "invalid argument" << std::endl;
                 return 1;
+            }            arg_consumed = true;
+        } else if(arg == "--eta-interval") {
+            if(args.size() <= i + 1) {
+                std::cout << prefix << "argument required" << std::endl;
+                return 1;
             }
 
+            int interval;
+            if(!parse_int(args[i + 1], &interval) || interval < 1) {
+                std::cout << prefix << "invalid argument (must be >= 1)" << std::endl;
+                return 1;
+            }
+            
+            eta_interval = (unsigned int)interval;
             arg_consumed = true;
         } else {
             operands.push_back(args[i]);
@@ -265,10 +282,8 @@ int main(int argc, char **argv)
         PasswordDictionary d(dictionary_files, format);
         std::cout << "Done" << std::endl;
 
-        std::cout << "Dictionary contains " << d.get_size() << " combinations" << std::endl;
-
-        std::cout << "Selected device: " << devices[selected_device].name << std::endl;
-        dictionary_cl(devices[selected_device], d, ct, iv, salt, iterations, start, 1);
+        std::cout << "Dictionary contains " << d.get_size() << " combinations" << std::endl;        std::cout << "Selected device: " << devices[selected_device].name << std::endl;
+        dictionary_cl(devices[selected_device], d, ct, iv, salt, iterations, start, 1, 1000, eta_interval);
     } catch(std::string err) {
         std::cout << "Error: " << err << std::endl;
         return 1;

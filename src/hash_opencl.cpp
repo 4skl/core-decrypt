@@ -268,7 +268,7 @@ static void find_best_parameters(struct device_info &device, cl_context ctx, cl_
     global = local * device.cores;
 }
 
-static void do_dictionary(struct device_info &device, PasswordDictionary &dictionary, unsigned int encrypted_block[4], unsigned int iv[4], unsigned char salt[8], unsigned int iterations, uint64_t start, int stride, unsigned int intensity)
+static void do_dictionary(struct device_info &device, PasswordDictionary &dictionary, unsigned int encrypted_block[4], unsigned int iv[4], unsigned char salt[8], unsigned int iterations, uint64_t start, int stride, unsigned int intensity, unsigned int eta_interval)
 {
     cl_mem dev_index = 0;
     cl_mem dev_words = 0;
@@ -356,17 +356,71 @@ static void do_dictionary(struct device_info &device, PasswordDictionary &dictio
     unsigned int start_iterations = 1;
     unsigned int middle_iterations = std::min(intensity, iterations);
     unsigned int middle_kernel_calls = (iterations - 1) / middle_iterations;
-    unsigned int end_iterations = iterations - 1 - middle_kernel_calls * middle_iterations;
-
-    uint64_t t0 = getSystemTime();
+    unsigned int end_iterations = iterations - 1 - middle_kernel_calls * middle_iterations;    uint64_t t0 = getSystemTime();
     uint64_t total_time = 0;
+    uint64_t start_time = getSystemTime();
 
     uint64_t total_passwords = dictionary.get_size();
-    int kernel_calls = 0;
-
-    std::cout << "Running..." << std::endl;
+    int kernel_calls = 0;    std::cout << "Running..." << std::endl;
+    std::cout << "Total passwords to check: " << total_passwords << std::endl;
+    std::cout << "Iterations per password: " << iterations << std::endl;
+    
+    // Quick benchmark to estimate total time
+    if(iterations > 1000000) {
+        std::cout << "High iteration count detected. Running quick benchmark..." << std::endl;
+        
+        uint64_t benchmark_start = getSystemTime();
+        unsigned int benchmark_iterations = 10000; // Test with 10k iterations
+        
+        // Set up benchmark kernel arguments
+        clCall(clSetKernelArg(start_kernel, 0, sizeof(cl_mem), &dev_words));
+        clCall(clSetKernelArg(start_kernel, 1, sizeof(cl_mem), &dev_index));
+        clCall(clSetKernelArg(start_kernel, 2, sizeof(cl_mem), &dev_offsets));
+        clCall(clSetKernelArg(start_kernel, 3, sizeof(unsigned int), &num_words));
+        clCall(clSetKernelArg(start_kernel, 4, sizeof(uint64_t), &total_passwords));
+        clCall(clSetKernelArg(start_kernel, 5, sizeof(unsigned int), &start_iterations));
+        clCall(clSetKernelArg(start_kernel, 6, sizeof(cl_mem), &dev_salt));
+        clCall(clSetKernelArg(start_kernel, 7, sizeof(uint64_t), &start));
+        clCall(clSetKernelArg(start_kernel, 8, sizeof(int), &stride));
+        clCall(clSetKernelArg(start_kernel, 9, sizeof(cl_mem), &dev_hashes));
+        clCall(clEnqueueNDRangeKernel(cmd, start_kernel, 1, NULL, &global, &local, 0, NULL, NULL));
+        clCall(clFinish(cmd));
+        
+        // Run benchmark middle kernel
+        clCall(clSetKernelArg(middle_kernel, 0, sizeof(cl_mem), &dev_hashes));
+        clCall(clSetKernelArg(middle_kernel, 1, sizeof(unsigned int), &benchmark_iterations));
+        clCall(clEnqueueNDRangeKernel(cmd, middle_kernel, 1, NULL, &global, &local, 0, NULL, NULL));
+        clCall(clFinish(cmd));
+        
+        uint64_t benchmark_time = getSystemTime() - benchmark_start;
+        
+        // Calculate estimated time per password and total time
+        double time_per_iteration = (double)benchmark_time / benchmark_iterations;
+        uint64_t estimated_time_per_password = (uint64_t)(time_per_iteration * iterations);
+        uint64_t estimated_total_time = estimated_time_per_password * total_passwords;
+        
+        std::cout << "Benchmark results:" << std::endl;
+        std::cout << "Time per iteration: " << format("%.3f", time_per_iteration) << " ms" << std::endl;
+        std::cout << "Estimated time per password: " << formatSeconds((unsigned int)(estimated_time_per_password/1000)) << std::endl;
+        std::cout << "Estimated total time: " << formatSeconds((unsigned int)(estimated_total_time/1000)) << std::endl;
+          if(estimated_total_time > 3600000) { // More than 1 hour
+            std::cout << "WARNING: This will take a very long time!" << std::endl;
+            std::cout << "Consider using a smaller wordlist or lower iteration count for testing." << std::endl;
+            std::cout << "Progress updates will be shown every " << eta_interval << " seconds." << std::endl;
+            std::cout << "Press Ctrl+C to cancel if this is too long." << std::endl;
+        }
+        
+        std::cout << "Starting full attack..." << std::endl;
+    }
+    
+    // Show initial progress for small dictionaries
+    if(total_passwords <= 1000) {
+        std::cout << "Progress: 0/" << total_passwords << " (0.00%) Speed: 0/sec ETA: calculating..." << std::endl;
+    }
 
     for(uint64_t i = start; i < dictionary_size; i += global * stride) {
+
+        std::cout << "Testing passwords " << i << " to " << std::min(i + global, dictionary_size) << " of " << dictionary_size << std::endl;
 
         // Set up the next password
         clCall(clSetKernelArg(start_kernel, 0, sizeof(cl_mem), &dev_words));
@@ -381,14 +435,58 @@ static void do_dictionary(struct device_info &device, PasswordDictionary &dictio
         clCall(clSetKernelArg(start_kernel, 9, sizeof(cl_mem), &dev_hashes));
         clCall(clEnqueueNDRangeKernel(cmd, start_kernel, 1, NULL, &global, &local, 0, NULL, NULL));
 
-        clCall(clFinish(cmd));
-
-        // Do hashing
+        clCall(clFinish(cmd));        // Do hashing
+        uint64_t last_progress_time = getSystemTime();
+        std::cout << "Starting hash computation with " << middle_kernel_calls << " iterations..." << std::endl;
+        
         for(unsigned int j = 0; j < middle_kernel_calls; j++) {
             clCall(clSetKernelArg(middle_kernel, 0, sizeof(cl_mem), &dev_hashes));
             clCall(clSetKernelArg(middle_kernel, 1, sizeof(unsigned int), &middle_iterations));
             clCall(clEnqueueNDRangeKernel(cmd, middle_kernel, 1, NULL, &global, &local, 0, NULL, NULL));
             clCall(clFinish(cmd));
+            
+            // Show progress during intensive hashing
+            uint64_t current_time = getSystemTime();
+            bool show_hash_progress = false;
+            
+            // Always show progress at regular time intervals for any dictionary size
+            if((current_time - last_progress_time) >= (eta_interval * 1000)) {
+                show_hash_progress = true;
+            }
+            // Also show progress at key milestones for very long operations
+            else if(middle_kernel_calls > 1000 && (j % (middle_kernel_calls / 20)) == 0 && j > 0) {
+                show_hash_progress = true;
+            }
+              if(show_hash_progress) {
+                double hash_progress = (double)(j + 1) / middle_kernel_calls;
+                
+                // Calculate overall progress including password being tested
+                uint64_t passwords_completed = i; // i is the starting index of current batch
+                uint64_t passwords_in_progress = std::min(global, dictionary_size - i);
+                double password_progress = hash_progress;
+                double overall_progress = ((double)passwords_completed + password_progress * passwords_in_progress) / total_passwords * 100.0;
+                
+                // Calculate ETA based on current progress
+                uint64_t elapsed_since_start = current_time - start_time;
+                if(elapsed_since_start > 0 && overall_progress > 0) {
+                    uint64_t estimated_total_time = (uint64_t)((double)elapsed_since_start * 100.0 / overall_progress);
+                    uint64_t eta = estimated_total_time - elapsed_since_start;
+                    
+                    std::cout << "Passwords " << passwords_completed << "-" << (passwords_completed + passwords_in_progress - 1) << "/" << total_passwords 
+                              << " - Hash progress: " << (j + 1) << "/" << middle_kernel_calls 
+                              << " (" << format("%.1f", hash_progress * 100.0) << "%) "
+                              << "Overall: " << format("%.2f", overall_progress) << "% "
+                              << "ETA: " << formatSeconds((unsigned int)(eta/1000)) << std::endl;
+                } else {
+                    std::cout << "Passwords " << passwords_completed << "-" << (passwords_completed + passwords_in_progress - 1) << "/" << total_passwords 
+                              << " - Hash progress: " << (j + 1) << "/" << middle_kernel_calls 
+                              << " (" << format("%.1f", hash_progress * 100.0) << "%) "
+                              << "Overall: " << format("%.2f", overall_progress) << "% "
+                              << "ETA: calculating..." << std::endl;
+                }
+                              
+                last_progress_time = current_time;
+            }
         }
 
         // Check the final hash
@@ -400,9 +498,7 @@ static void do_dictionary(struct device_info &device, PasswordDictionary &dictio
         clCall(clEnqueueNDRangeKernel(cmd, end_kernel, 1, NULL, &global, &local, 0, NULL, NULL));
         clCall(clEnqueueReadBuffer(cmd, dev_result, CL_TRUE, 0, sizeof(int), &result, 0, NULL, NULL));
         clCall(clFinish(cmd));
-        kernel_calls++;
-
-        if(result >= 0) {
+        kernel_calls++;        if(result >= 0) {
             std::cout << "======== Password found ========" << std::endl;
             uint64_t num = i + result * stride;
             std::string password = dictionary.get_password(num);
@@ -415,10 +511,34 @@ static void do_dictionary(struct device_info &device, PasswordDictionary &dictio
             std::cout << "Password written to " << file_name << std::endl;
 
             break;
-        }
-
-        uint64_t t1 = getSystemTime() - t0;
+        } else {
+            std::cout << "No password found in this batch (result: " << result << ")" << std::endl;
+        }        uint64_t t1 = getSystemTime() - t0;
         total_time += t1;
+
+        // Calculate progress and ETA - always show for completion or periodically
+        uint64_t passwords_processed = std::min(i + global, dictionary_size);
+        double progress_percent = ((double)passwords_processed / total_passwords) * 100.0;
+        uint64_t elapsed_total = getSystemTime() - start_time;
+        
+        // Always show progress for small dictionaries, or every 5 seconds for large ones
+        bool show_progress = (total_passwords <= 1000) || (t1 >= 5000) || (passwords_processed >= dictionary_size);
+        
+        if(show_progress && elapsed_total > 0) {
+            if(progress_percent < 100.0 && passwords_processed < dictionary_size) {
+                uint64_t estimated_total_time = (elapsed_total * total_passwords) / passwords_processed;
+                uint64_t eta_ms = estimated_total_time - elapsed_total;
+                
+                std::cout << "Progress: " << passwords_processed << "/" << total_passwords 
+                          << " (" << format("%.2f", progress_percent) << "%) "
+                          << "Speed: " << ((passwords_processed * 1000) / elapsed_total) << "/sec "
+                          << "ETA: " << formatSeconds((unsigned int)(eta_ms/1000)) << std::endl;
+            } else {
+                std::cout << "Progress: " << passwords_processed << "/" << total_passwords 
+                          << " (100.00%) Complete! "
+                          << "Total time: " << formatSeconds((unsigned int)(elapsed_total/1000)) << std::endl;
+            }
+        }
 
         if(t1 >= 1800) {
             std::cout << device.name.substr(0, 16) << "| "
@@ -584,11 +704,11 @@ bool brute_force_cl(int password_len, unsigned int encrypted_block[4], unsigned 
     return true;
 }
 
-bool dictionary_cl(struct device_info &device, PasswordDictionary &dictionary, unsigned int encrypted_block[4], unsigned int iv[4], unsigned char salt[8], unsigned int iterations, uint64_t start, int stride, unsigned int intensity)
+bool dictionary_cl(struct device_info &device, PasswordDictionary &dictionary, unsigned int encrypted_block[4], unsigned int iv[4], unsigned char salt[8], unsigned int iterations, uint64_t start, int stride, unsigned int intensity, unsigned int eta_interval)
 {
     load_kernel_source();
 
-    do_dictionary(device, dictionary, encrypted_block, iv, salt, iterations, start, stride, intensity);
+    do_dictionary(device, dictionary, encrypted_block, iv, salt, iterations, start, stride, intensity, eta_interval);
 
     return true;
 }

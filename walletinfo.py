@@ -88,6 +88,6 @@ if len(sys.argv) != 2 or sys.argv[1].startswith("-"):
 
 wallet_filename = os.path.abspath(sys.argv[1])
 encrypted_key = read_encrypted_key(wallet_filename)
-print(encrypted_key)
+print(encrypted_key.decode('ascii'))
 
     
