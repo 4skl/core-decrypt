@@ -218,7 +218,7 @@ unsigned int sub_and_rotate(unsigned int t)
     return (_sbox[(unsigned char)(t >> 16)] << 24) | (_sbox[(unsigned char)(t >> 8)] << 16) | (_sbox[(unsigned char)t] << 8) | _sbox[(unsigned char)(t >> 24)]; \
 }
 
-void aes_256_key_expand(__private const unsigned int *key, unsigned int *subkeys)
+void aes_256_key_expand(__private const unsigned int *key, __private unsigned int *subkeys)
 {
     unsigned int t;
     for(int i = 0; i < 8; i++) {
